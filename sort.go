@@ -48,18 +48,20 @@ func (s SortCollection) Less(i, j int) bool {
 	}
 }
 
-func asyncReadLine(file *easyfiles.File, channel chan string) {
+func asyncReadLine(file *easyfiles.File) <-chan string {
+	outChan := make(chan string, 10000)
 	go func() {
-		defer close(channel)
+		defer close(outChan)
 		reader, err := file.Reader(0)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, fmt.Sprintf("Failed to get reader to file '%v': %v", file.Path, err))
 		}
 		reader.Split(bufio.ScanLines)
 		for reader.Scan() {
-			channel <- reader.Text()
+			outChan <- reader.Text()
 		}
 	}()
+	return outChan
 }
 
 func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []string, err error) {
@@ -79,11 +81,10 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 	}
 	defer fstruct.Close()
 
-	inputChannel := make(chan string, 10000)
 	idx := 0
 	lines := 0
 
-	asyncReadLine(fstruct, inputChannel)
+	inputChannel := asyncReadLine(fstruct)
 
 	for {
 		sort_params.Lines = sort_params.Lines[:0]

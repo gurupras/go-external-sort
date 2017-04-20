@@ -12,6 +12,7 @@ import (
 	"gopkg.in/vmihailenco/msgpack.v2"
 
 	"github.com/gurupras/go-easyfiles"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,7 +84,7 @@ func TestIntSort(t *testing.T) {
 
 	var err error
 	var chunks []string
-	var memory int = 1048576
+	var memory int = 1024 * 128
 
 	merge_out_channel := make(chan SortInterface, 10000)
 
@@ -94,8 +95,7 @@ func TestIntSort(t *testing.T) {
 		}
 		defer expected_fstruct.Close()
 
-		expected_chan := make(chan string, 10000)
-		asyncReadLine(expected_fstruct, expected_chan)
+		expected_chan := asyncReadLine(expected_fstruct)
 
 		var expected string
 		var object SortInterface
@@ -114,6 +114,7 @@ func TestIntSort(t *testing.T) {
 					assert.Fail("Expected file has data while n-way merge generator has ended?")
 				}
 			}
+			//log.Infof("expected=%v object=%v", expected, object.String())
 			lines++
 			if lines%10000 == 0 {
 				//fmt.Println("Finished comparing:", lines)
@@ -124,9 +125,9 @@ func TestIntSort(t *testing.T) {
 	}
 
 	if chunks, err = ExternalSort("./test/sort.gz", memory, IntSortParams); err != nil {
-		assert.Fail("Failed to run external sort", err)
+		assert.Fail("Failed to run external sort", fmt.Sprintf("%v", err))
 	}
-	//fmt.Println("Merging...")
+	log.Infof("Created %v chunks. Merging...", len(chunks))
 	NWayMergeGenerator(chunks, IntSortParams, merge_out_channel, callback)
 	for _, chunk := range chunks {
 		_ = chunk

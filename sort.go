@@ -4,12 +4,12 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"sort"
 
 	"github.com/gurupras/go-easyfiles"
 
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/vmihailenco/msgpack.v2"
 )
 
@@ -69,7 +69,7 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 
 	var outfile_path string
 	var outfile_raw *easyfiles.File
-	var outfile easyfiles.Writer
+	var outfile *easyfiles.Writer
 
 	chunk_idx := 0
 	bytes_read := 0
@@ -117,13 +117,15 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 		sort.Sort(sort_params.Lines)
 
 		outfile_path = fmt.Sprintf("%s.chunk.%08d.gz", file, chunk_idx)
-		//fmt.Println("Saving to chunk:", outfile_path)
-		if outfile_raw, err = sort_params.FSInterface.Open(outfile_path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, easyfiles.GZ_TRUE); err != nil {
+		//log.Infof("Saving to chunk: %v", outfile_path)
+		if outfile_raw, err = sort_params.FSInterface.Open(outfile_path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, easyfiles.GZ_TRUE); err != nil {
+			log.Warnf("Failed to open chunk: %v: %v", outfile_path, err)
 			return
 		}
-		defer outfile_raw.Close()
+		log.Infof("Writing chunk: %v (%d lines)", outfile_path, len(sort_params.Lines))
 
 		if outfile, err = outfile_raw.Writer(0); err != nil {
+			log.Warnf("Failed to get writer to chunk: %v: %v", outfile_path, err)
 			return
 		}
 		chunks = append(chunks, outfile_path)
@@ -131,26 +133,59 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 		var b []byte
 		// First write the number of objects
 		if b, err = msgpack.Marshal(len(sort_params.Lines)); err != nil {
+			log.Warnf("Failed msgpack.Marshal on num objects: %v", err)
 			chunks = nil
 			return
 		}
 		if _, err = outfile.Write(b); err != nil {
+			log.Warnf("Failed write: %v", err)
 			chunks = nil
 			return
 		}
 
+		numBytes := 0
 		for _, object := range sort_params.Lines {
 			if b, err = msgpack.Marshal(object); err != nil {
+				log.Warnf("Failed msgpack.Marshal on object: %v", err)
 				chunks = nil
 				return
 			}
-			outfile.Write(b)
+			if _, err = outfile.Write(b); err != nil {
+				log.Fatalf("Failed to write data to file: %v: %v", outfile_path, err)
+			}
+			numBytes += len(b)
 		}
+		log.Infof("Saving to chunk: %v (%vb)", outfile_path, numBytes)
 		chunk_idx += 1
-		outfile.Flush()
-		outfile.Close()
+		if err = outfile.Flush(); err != nil {
+			log.Fatalf("Failed flush: %v: %v", outfile_path, err)
+		}
+		if err = outfile.Close(); err != nil {
+			log.Fatalf("Failed writer close: %v: %v", outfile_path, err)
+		}
+		if err = outfile_raw.Close(); err != nil {
+			log.Fatalf("Failed close: %v: %v", outfile_path, err)
+		}
+
+		// XXX: Remove this
+		// Check the written data
+		/*
+			var info os.FileInfo
+			info, err = sort_params.FSInterface.Stat(outfile_path)
+			if err != nil {
+				log.Warnf("Failed stat")
+				return
+			}
+			if info.Size() == 0 {
+				log.Warnf("Stat returned 0: %v", outfile_path)
+				return
+			} else {
+				log.Infof("stat returned: %v", info.Size())
+			}
+		*/
 	}
 	//fmt.Fprintln(os.Stderr, fmt.Sprintf("%s: %d lines", file, lines))
+	log.Infof("Total lines read while splitting: %v", lines)
 	return
 }
 
@@ -160,7 +195,7 @@ func NWayMergeGenerator(chunks []string, sort_params SortParams, out_channel cha
 	var readers map[string]io.Reader = make(map[string]io.Reader)
 	var channels map[string]chan SortInterface = make(map[string]chan SortInterface)
 	var err error
-	quit := make(chan bool, 1)
+	quit := make(chan bool)
 
 	// Read file and write to channel
 	closed_channels := 0
@@ -213,6 +248,13 @@ func NWayMergeGenerator(chunks []string, sort_params SortParams, out_channel cha
 				}
 			}
 			if more == false {
+				/*
+					for _, v := range loglines {
+						if v != nil {
+							log.Fatalf("Breaking from loop when non-nil value in loglines")
+						}
+					}
+				*/
 				break
 			}
 
@@ -246,35 +288,46 @@ func NWayMergeGenerator(chunks []string, sort_params SortParams, out_channel cha
 				close(out_channel)
 			}
 			out_channel <- next_line
+			lines_read++
 		}
+		log.Infof("Total lines from all chunks: %v", lines_read)
 	}
 
 	// Set up readers and channels
+	log.Infof("Setting up readers for %d chunks", len(chunks))
 	for _, chunk := range chunks {
 		chunk_file, err := sort_params.FSInterface.Open(chunk, os.O_RDONLY, easyfiles.GZ_TRUE)
 		if err != nil {
+			err = fmt.Errorf("Failed to open file: %v: %v", chunk, err)
+			log.Fatalf("%v", err)
 			goto out
 		}
 		defer chunk_file.Close()
 		reader, err := chunk_file.RawReader()
 		if err != nil {
+			err = fmt.Errorf("Failed to get reader to file: %v: %v", chunk, err)
+			log.Fatalf("%v", err)
 			goto out
 		}
 		readers[chunk] = reader
 		// Resize channel size based on number of channels
 		NORMAL_SIZE := 10000
 		channel_size := NORMAL_SIZE / len(chunks)
-		channels[chunk] = make(chan SortInterface, channel_size)
+		_ = channel_size
+		channels[chunk] = make(chan SortInterface)
 	}
 
 	// Start the producers
+	log.Infof("Starting producers")
 	for idx, _ := range chunks {
 		go producer(idx)
 	}
 
 	// Start consumer
+	log.Infof("Starting consumer")
 	go consumer()
 
+	log.Infof("Starting callback")
 	go callback(out_channel, sort_params, quit)
 	//fmt.Println("NWayMergeGenerator: Waiting for callback to quit")
 	_ = <-quit

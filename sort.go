@@ -49,7 +49,7 @@ func (s SortCollection) Less(i, j int) bool {
 }
 
 func asyncReadLine(file *easyfiles.File) <-chan string {
-	outChan := make(chan string, 10000)
+	outChan := make(chan string, 100)
 	go func() {
 		defer close(outChan)
 		reader, err := file.Reader(0)
@@ -311,10 +311,7 @@ func NWayMergeGenerator(chunks []string, sort_params SortParams, out_channel cha
 		}
 		readers[chunk] = reader
 		// Resize channel size based on number of channels
-		NORMAL_SIZE := 10000
-		channel_size := NORMAL_SIZE / len(chunks)
-		_ = channel_size
-		channels[chunk] = make(chan SortInterface)
+		channels[chunk] = make(chan SortInterface, 10)
 	}
 
 	// Start the producers

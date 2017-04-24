@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"sync"
 	"testing"
 
 	"gopkg.in/vmihailenco/msgpack.v2"
@@ -77,20 +78,19 @@ func TestIntString(t *testing.T) {
 	assert.Equal("5", str, "Should be equal")
 }
 
-func TestIntSort(t *testing.T) {
+func testIntSort(t *testing.T, name string) {
 	t.Parallel()
 
 	assert := assert.New(t)
+	require := require.New(t)
 
 	var err error
 	var chunks []string
 	var memory int = 1024 * 128
 
-	merge_out_channel := make(chan SortInterface, 10000)
-
-	callback := func(channel chan SortInterface, sort_params SortParams, quit chan bool) {
+	callback := func(channel <-chan SortInterface, sort_params SortParams) {
 		var expected_fstruct *easyfiles.File
-		if expected_fstruct, err = easyfiles.Open("./test/sort_expected.gz", os.O_RDONLY, easyfiles.GZ_TRUE); err != nil {
+		if expected_fstruct, err = easyfiles.Open(fmt.Sprintf("./test/%v_expected.gz", name), os.O_RDONLY, easyfiles.GZ_TRUE); err != nil {
 			return
 		}
 		defer expected_fstruct.Close()
@@ -116,23 +116,38 @@ func TestIntSort(t *testing.T) {
 			}
 			//log.Infof("expected=%v object=%v", expected, object.String())
 			lines++
-			if lines%10000 == 0 {
-				//fmt.Println("Finished comparing:", lines)
+			if lines%100 == 0 {
+				//log.Infof("Compared: %v", lines)
 			}
-			assert.Equal(expected, object.String())
+			require.Equal(expected, object.String())
 		}
-		quit <- true
 	}
 
-	if chunks, err = ExternalSort("./test/sort.gz", memory, IntSortParams); err != nil {
+	if chunks, err = ExternalSort(fmt.Sprintf("./test/%v.gz", name), memory, IntSortParams); err != nil {
 		assert.Fail("Failed to run external sort", fmt.Sprintf("%v", err))
 	}
 	log.Infof("Created %v chunks. Merging...", len(chunks))
-	NWayMergeGenerator(chunks, IntSortParams, merge_out_channel, callback)
+	outChan, err := NWayMergeGenerator(chunks, IntSortParams)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		callback(outChan, IntSortParams)
+	}()
+	wg.Wait()
 	for _, chunk := range chunks {
 		_ = chunk
 		os.Remove(chunk)
 	}
+}
+
+func TestShortIntSort(t *testing.T) {
+	testIntSort(t, "sort_small")
+}
+
+func TestLongIntSort(t *testing.T) {
+	testIntSort(t, "sort")
 }
 
 type I interface {

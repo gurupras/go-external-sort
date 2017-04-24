@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"sync"
 
 	"github.com/gurupras/go-easyfiles"
 
@@ -189,13 +190,13 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 	return
 }
 
-func NWayMergeGenerator(chunks []string, sort_params SortParams, out_channel chan SortInterface,
-	callback func(out_channel chan SortInterface, sort_params SortParams, quit chan bool)) error {
+func NWayMergeGenerator(chunks []string, sort_params SortParams) (<-chan SortInterface, error) {
 
 	var readers map[string]io.Reader = make(map[string]io.Reader)
 	var channels map[string]chan SortInterface = make(map[string]chan SortInterface)
 	var err error
-	quit := make(chan bool)
+
+	outChan := make(chan SortInterface)
 
 	// Read file and write to channel
 	closed_channels := 0
@@ -226,8 +227,7 @@ func NWayMergeGenerator(chunks []string, sort_params SortParams, out_channel cha
 
 	// Now for the consumer
 	consumer := func() {
-		defer close(out_channel)
-
+		defer close(outChan)
 		loglines := make([]SortInterface, len(chunks))
 
 		lines_read := 0
@@ -285,49 +285,51 @@ func NWayMergeGenerator(chunks []string, sort_params SortParams, out_channel cha
 						fmt.Fprintln(os.Stderr, idx, ":", l.String())
 					}
 				}
-				close(out_channel)
+				close(outChan)
 			}
-			out_channel <- next_line
+			outChan <- next_line
+			//log.Infof("Dumped line to outChan")
 			lines_read++
 		}
 		log.Infof("Total lines from all chunks: %v", lines_read)
 	}
 
-	// Set up readers and channels
-	log.Infof("Setting up readers for %d chunks", len(chunks))
-	for _, chunk := range chunks {
-		chunk_file, err := sort_params.FSInterface.Open(chunk, os.O_RDONLY, easyfiles.GZ_TRUE)
-		if err != nil {
-			err = fmt.Errorf("Failed to open file: %v: %v", chunk, err)
-			log.Fatalf("%v", err)
-			goto out
+	go func() {
+		// Set up readers and channels
+		log.Infof("Setting up readers for %d chunks", len(chunks))
+		wg := sync.WaitGroup{}
+		files := make([]*easyfiles.File, len(chunks))
+		for idx, chunk := range chunks {
+			chunk_file, err := sort_params.FSInterface.Open(chunk, os.O_RDONLY, easyfiles.GZ_TRUE)
+			if err != nil {
+				err = fmt.Errorf("Failed to open file: %v: %v", chunk, err)
+				log.Fatalf("%v", err)
+			}
+			files[idx] = chunk_file
+			reader, err := chunk_file.RawReader()
+			if err != nil {
+				err = fmt.Errorf("Failed to get reader to file: %v: %v", chunk, err)
+				log.Fatalf("%v", err)
+			}
+			readers[chunk] = reader
+			// Resize channel size based on number of channels
+			channels[chunk] = make(chan SortInterface, 10)
 		}
-		defer chunk_file.Close()
-		reader, err := chunk_file.RawReader()
-		if err != nil {
-			err = fmt.Errorf("Failed to get reader to file: %v: %v", chunk, err)
-			log.Fatalf("%v", err)
-			goto out
+		// Start the producers
+		for idx, _ := range chunks {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				defer files[idx].Close()
+				producer(idx)
+			}(idx)
 		}
-		readers[chunk] = reader
-		// Resize channel size based on number of channels
-		channels[chunk] = make(chan SortInterface, 10)
-	}
 
-	// Start the producers
-	log.Infof("Starting producers")
-	for idx, _ := range chunks {
-		go producer(idx)
-	}
+		// Start consumer
+		log.Infof("Starting consumer")
+		go consumer()
 
-	// Start consumer
-	log.Infof("Starting consumer")
-	go consumer()
-
-	log.Infof("Starting callback")
-	go callback(out_channel, sort_params, quit)
-	//fmt.Println("NWayMergeGenerator: Waiting for callback to quit")
-	_ = <-quit
-out:
-	return err
+		wg.Wait()
+	}()
+	return outChan, err
 }

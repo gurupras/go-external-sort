@@ -190,13 +190,21 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 	return
 }
 
-func NWayMergeGenerator(chunks []string, sort_params SortParams) (<-chan SortInterface, error) {
+func NWayMergeGenerator(chunks []string, sort_params SortParams, kwargs ...map[string]interface{}) (<-chan SortInterface, error) {
 
 	var readers map[string]io.Reader = make(map[string]io.Reader)
 	var channels map[string]chan SortInterface = make(map[string]chan SortInterface)
 	var err error
 
-	outChan := make(chan SortInterface)
+	var channelSize int
+	if len(kwargs) > 0 {
+		if v, ok := kwargs[0]["channel_size"]; ok {
+			if channelSize, ok = v.(int); !ok {
+				log.Errorf("Expected channel_size type to be int. Got %t", v)
+			}
+		}
+	}
+	outChan := make(chan SortInterface, channelSize)
 
 	// Read file and write to channel
 	closed_channels := 0

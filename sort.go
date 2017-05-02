@@ -321,7 +321,7 @@ func NWayMergeGenerator(chunks []string, sort_params SortParams, kwargs ...map[s
 			}
 			readers[chunk] = reader
 			// Resize channel size based on number of channels
-			channels[chunk] = make(chan SortInterface, 10)
+			channels[chunk] = make(chan SortInterface, 1000)
 		}
 		// Start the producers
 		for idx, _ := range chunks {

@@ -123,7 +123,7 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 			log.Warnf("Failed to open chunk: %v: %v", outfile_path, err)
 			return
 		}
-		log.Infof("Writing chunk: %v (%d lines)", outfile_path, len(sort_params.Lines))
+		log.Debugf("Writing chunk: %v (%d lines)", outfile_path, len(sort_params.Lines))
 
 		if outfile, err = outfile_raw.Writer(bufsize); err != nil {
 			log.Warnf("Failed to get writer to chunk: %v: %v", outfile_path, err)
@@ -156,7 +156,7 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 			}
 			numBytes += len(b)
 		}
-		log.Infof("Saving to chunk: %v (%vb)", outfile_path, numBytes)
+		log.Debugf("Saving to chunk: %v (%vb)", outfile_path, numBytes)
 		chunk_idx += 1
 		if err = outfile.Flush(); err != nil {
 			log.Fatalf("Failed flush: %v: %v", outfile_path, err)

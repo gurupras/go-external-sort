@@ -125,7 +125,7 @@ func ExternalSort(file string, bufsize int, sort_params SortParams) (chunks []st
 		}
 		log.Debugf("Writing chunk: %v (%d lines)", outfile_path, len(sort_params.Lines))
 
-		if outfile, err = outfile_raw.Writer(bufsize); err != nil {
+		if outfile, err = outfile_raw.Writer(1048576); err != nil {
 			log.Warnf("Failed to get writer to chunk: %v: %v", outfile_path, err)
 			return
 		}
